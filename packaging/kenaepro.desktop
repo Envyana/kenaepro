@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=KenaePRO
+Comment=Frame-by-frame video review and annotation
+Exec=kenaepro %f
+Icon=kenaepro
+Terminal=false
+Categories=AudioVideo;Video;
+MimeType=video/mp4;video/quicktime;video/x-matroska;video/x-msvideo;video/webm;video/mpeg;video/x-flv;video/x-ms-wmv;

@@ -1,0 +1,12 @@
+# Build environment for framereview: Debian 13 has Qt 6.8 and FFmpeg 7.1.
+# Usage (from the project folder):
+#   podman build -t framereview-build -f scripts/Containerfile.debian13 scripts
+#   podman run --rm -v "$PWD":/src:Z -w /src framereview-build scripts/build-in-container.sh
+FROM docker.io/library/debian:trixie
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        cmake ninja-build g++ pkg-config ca-certificates \
+        qt6-base-dev libqt6opengl6-dev qt6-multimedia-dev libgl-dev \
+        libavformat-dev libavcodec-dev libavutil-dev libswscale-dev libswresample-dev \
+        ffmpeg xvfb xauth python3 \
+    && rm -rf /var/lib/apt/lists/*

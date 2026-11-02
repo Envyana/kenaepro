@@ -1,0 +1,55 @@
+# AppImage build environment for framereview.
+#
+# Ubuntu 22.04 (glibc 2.35) is the base so the AppImage also runs on 22.04 and anything newer.
+# Its own Qt and FFmpeg are too old, so Qt 6.8 comes from the official binaries (aqtinstall) and
+# FFmpeg 7.1 is built here as LGPL (no GPL or non-free parts) with only its built-in codecs.
+#
+# Usage (from the project folder):
+#   podman build -t framereview-appimage -f scripts/Containerfile.appimage scripts
+#   podman run --rm -v "$PWD":/src:Z -w /src framereview-appimage scripts/build-appimage.sh
+FROM docker.io/library/ubuntu:22.04
+
+ARG QT_VERSION=6.8.3
+ARG FFMPEG_VERSION=7.1.2
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl xz-utils file python3 python3-pip \
+        cmake ninja-build g++-12 pkg-config nasm patchelf \
+        libgl-dev libegl-dev libglib2.0-0 libfontconfig1 libfreetype6 libdbus-1-3 \
+        libxkbcommon0 libxkbcommon-x11-0 libx11-xcb1 libxcb-cursor0 libxcb-icccm4 \
+        libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
+        libxcb-xinerama0 libxcb-xkb1 libxcb-sync1 libxcb-xfixes0 libxcb-shm0 libpulse0 \
+        xvfb xauth ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+ENV CC=gcc-12 CXX=g++-12
+
+# Qt from the official binaries. The download mirrors are flaky, so retry a few times.
+RUN pip3 install --no-cache-dir aqtinstall \
+    && for i in 1 2 3 4 5; do \
+         aqt install-qt linux desktop ${QT_VERSION} linux_gcc_64 -m qtmultimedia -O /opt/Qt && break; \
+         echo "aqt attempt $i failed, retrying"; sleep 10; \
+       done \
+    && test -d /opt/Qt/${QT_VERSION}/gcc_64/lib/cmake/Qt6Multimedia
+ENV QTDIR=/opt/Qt/${QT_VERSION}/gcc_64
+
+# FFmpeg as LGPL shared libraries. --disable-autodetect keeps it from linking optional system
+# libraries (VAAPI, X11, ...) that would then have to be bundled; zlib is enabled for MOV/PNG.
+RUN apt-get update && apt-get install -y --no-install-recommends zlib1g-dev make \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz | tar -xJ -C /tmp \
+    && cd /tmp/ffmpeg-${FFMPEG_VERSION} \
+    && ./configure --prefix=/opt/ffmpeg --cc=gcc-12 --enable-shared --disable-static \
+         --disable-programs --disable-doc --disable-autodetect --enable-zlib \
+    && make -j"$(nproc)" && make install \
+    && cd / && rm -rf /tmp/ffmpeg-${FFMPEG_VERSION}
+ENV PKG_CONFIG_PATH=/opt/ffmpeg/lib/pkgconfig \
+    LD_LIBRARY_PATH=/opt/ffmpeg/lib
+
+# linuxdeploy and its Qt plugin, run without FUSE inside the container.
+RUN mkdir -p /opt/linuxdeploy && cd /opt/linuxdeploy \
+    && curl -fsSLO https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
+    && curl -fsSLO https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage \
+    && chmod +x *.AppImage
+ENV PATH=/opt/linuxdeploy:$PATH \
+    APPIMAGE_EXTRACT_AND_RUN=1

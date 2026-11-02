@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- A film frame with a red annotation stroke: KenaePRO's application icon. -->
+  <rect x="16" y="40" width="224" height="176" rx="20" fill="#26292e"/>
+  <g fill="#8a919c">
+    <rect x="30" y="52" width="16" height="12" rx="3"/>
+    <rect x="30" y="84" width="16" height="12" rx="3"/>
+    <rect x="30" y="116" width="16" height="12" rx="3"/>
+    <rect x="30" y="148" width="16" height="12" rx="3"/>
+    <rect x="30" y="180" width="16" height="12" rx="3"/>
+    <rect x="210" y="52" width="16" height="12" rx="3"/>
+    <rect x="210" y="84" width="16" height="12" rx="3"/>
+    <rect x="210" y="116" width="16" height="12" rx="3"/>
+    <rect x="210" y="148" width="16" height="12" rx="3"/>
+    <rect x="210" y="180" width="16" height="12" rx="3"/>
+  </g>
+  <rect x="58" y="56" width="140" height="144" rx="6" fill="#4b7bbf"/>
+  <path d="M78 170 C 100 120, 128 150, 146 108 S 176 82, 182 76" fill="none" stroke="#f04a3e"
+        stroke-width="12" stroke-linecap="round"/>
+</svg>

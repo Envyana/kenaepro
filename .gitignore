@@ -1,0 +1,23 @@
+build/
+build-*/
+cmake-build-*/
+.cache/
+compile_commands.json
+*.user
+
+# Release artifacts
+*.AppImage
+!scripts/Containerfile.appimage
+*.zip
+*.tar.gz
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+._*
+
+# Local logs
+*.log
