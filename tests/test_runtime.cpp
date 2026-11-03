@@ -666,6 +666,92 @@ private slots:
                                     .arg(n).arg(gray).arg(expectedGray(n))));
         }
     }
+
+    // Regression: 1080-wide video (portrait phone clips, squares) crashed on Linux because the
+    // x86 swscale paths wrote past the end of an exactly sized output buffer. Decoding every
+    // frame twice would corrupt the heap and abort before the fix.
+    void video_with_width_not_a_multiple_of_16_decodes() {
+        if (!videoDecodingAvailable()) QSKIP("built without FFmpeg");
+        const QString ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+        if (ffmpeg.isEmpty()) QSKIP("the ffmpeg executable is not in PATH");
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        const QSize sizes[] = {QSize(1080, 1920), QSize(1080, 1080), QSize(1080, 1350)};
+        for (const QSize& size : sizes) {
+            const QString path = dir.filePath(QStringLiteral("clip-%1x%2.mkv").arg(size.width()).arg(size.height()));
+            QProcess make;
+            make.start(ffmpeg, {QStringLiteral("-v"), QStringLiteral("error"), QStringLiteral("-f"),
+                                QStringLiteral("lavfi"), QStringLiteral("-i"),
+                                QStringLiteral("testsrc2=s=%1x%2:r=10:d=1").arg(size.width()).arg(size.height()),
+                                QStringLiteral("-c:v"), QStringLiteral("ffv1"), QStringLiteral("-pix_fmt"),
+                                QStringLiteral("yuv420p"), QStringLiteral("-y"), path});
+            QVERIFY2(make.waitForFinished(60000) && make.exitCode() == 0, "ffmpeg could not make the test video");
+
+            QString error;
+            std::unique_ptr<FrameSource> source = openFrameSource(path, &error);
+            QVERIFY2(source, qPrintable(error));
+            QCOMPARE(source->size(), size);
+            for (int pass = 0; pass < 2; ++pass) {
+                for (int n = 0; n < source->frameCount(); ++n) {
+                    const QImage image = source->frame(n);
+                    QVERIFY2(!image.isNull(), qPrintable(QStringLiteral("frame %1 is null").arg(n)));
+                    QCOMPARE(image.size(), size);
+                }
+            }
+        }
+    }
+
+    // Phones store portrait video as landscape frames plus a display matrix. The frame must come
+    // out upright, matching what ffmpeg's own autorotate produces.
+    void video_display_rotation_is_applied() {
+        if (!videoDecodingAvailable()) QSKIP("built without FFmpeg");
+        const QString ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+        if (ffmpeg.isEmpty()) QSKIP("the ffmpeg executable is not in PATH");
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+
+        // 64x48, left half red, right half blue.
+        const QString plain = dir.filePath(QStringLiteral("lr.mov"));
+        QProcess make;
+        make.start(ffmpeg, {QStringLiteral("-v"), QStringLiteral("error"), QStringLiteral("-f"),
+                            QStringLiteral("lavfi"), QStringLiteral("-i"),
+                            QStringLiteral("color=c=red:s=64x48:r=10:d=1,drawbox=x=32:y=0:w=32:h=48:color=blue:t=fill"),
+                            QStringLiteral("-c:v"), QStringLiteral("png"), QStringLiteral("-y"), plain});
+        QVERIFY2(make.waitForFinished(30000) && make.exitCode() == 0, "ffmpeg could not make the test video");
+
+        struct Case { int ccw; QSize size; QPoint redAt; QPoint blueAt; };
+        // ffmpeg's -display_rotation is counter-clockwise; positions follow ffmpeg's autorotate.
+        const Case cases[] = {
+            {0, QSize(64, 48), QPoint(8, 24), QPoint(56, 24)},
+            {90, QSize(48, 64), QPoint(24, 56), QPoint(24, 8)},
+            {-90, QSize(48, 64), QPoint(24, 8), QPoint(24, 56)},
+            {180, QSize(64, 48), QPoint(56, 24), QPoint(8, 24)},
+        };
+        for (const Case& c : cases) {
+            const QString path = dir.filePath(QStringLiteral("rot%1.mov").arg(c.ccw));
+            // -display_rotation needs ffmpeg 6.1+. The legacy "rotate" tag of older ffmpeg (e.g.
+            // Ubuntu 22.04's 4.4) is written with an inconsistent direction, so it is not used here.
+            QProcess remux;
+            remux.start(ffmpeg, {QStringLiteral("-v"), QStringLiteral("error"), QStringLiteral("-display_rotation"),
+                                 QString::number(c.ccw), QStringLiteral("-i"), plain, QStringLiteral("-c"),
+                                 QStringLiteral("copy"), QStringLiteral("-y"), path});
+            if (!remux.waitForFinished(30000) || remux.exitCode() != 0) {
+                QSKIP("this ffmpeg has no -display_rotation (needs 6.1 or newer)");
+            }
+
+            QString error;
+            std::unique_ptr<FrameSource> source = openFrameSource(path, &error);
+            QVERIFY2(source, qPrintable(error));
+            QCOMPARE(source->size(), c.size);
+            const QImage image = source->frame(0);
+            QCOMPARE(image.size(), c.size);
+            const QColor red = image.pixelColor(c.redAt);
+            const QColor blue = image.pixelColor(c.blueAt);
+            QVERIFY2(red.red() > 200 && red.blue() < 60, qPrintable(QStringLiteral("rotation %1: expected red").arg(c.ccw)));
+            QVERIFY2(blue.blue() > 200 && blue.red() < 60, qPrintable(QStringLiteral("rotation %1: expected blue").arg(c.ccw)));
+        }
+    }
 };
 
 QTEST_MAIN(RuntimeTests)

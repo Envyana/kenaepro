@@ -3,10 +3,14 @@
 #include <algorithm>
 #include <cmath>
 
+#include <QTransform>
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/display.h>
+#include <libavutil/mem.h>
 #include <libswscale/swscale.h>
 }
 
@@ -23,6 +27,36 @@ bool fail(QString* error, const QString& message) {
     if (error) *error = message;
     return false;
 }
+
+// Clockwise rotation (0, 90, 180 or 270) that shows the picture upright. Phones store portrait video
+// as landscape frames plus a display matrix; ignoring it shows the video on its side.
+int displayRotation(const AVStream* stream) {
+    const int32_t* matrix = nullptr;
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(60, 31, 100)
+    const AVPacketSideData* data = av_packet_side_data_get(stream->codecpar->coded_side_data,
+                                                           stream->codecpar->nb_coded_side_data,
+                                                           AV_PKT_DATA_DISPLAYMATRIX);
+    if (data && data->size >= 9 * static_cast<int>(sizeof(int32_t))) {
+        matrix = reinterpret_cast<const int32_t*>(data->data);
+    }
+#else
+    size_t size = 0;
+    const uint8_t* data = av_stream_get_side_data(stream, AV_PKT_DATA_DISPLAYMATRIX, &size);
+    if (data && size >= 9 * sizeof(int32_t)) matrix = reinterpret_cast<const int32_t*>(data);
+#endif
+    if (!matrix) return 0;
+    const double counterClockwise = av_display_rotation_get(matrix);
+    if (std::isnan(counterClockwise)) return 0;
+    const int clockwise = static_cast<int>(std::lround(-counterClockwise / 90.0)) * 90;
+    return ((clockwise % 360) + 360) % 360;
+}
+
+// Row padding for the swscale output. Its x86 SIMD paths write in blocks and can run up to a block
+// past the last pixel of a row when the width is not a multiple of 16 (1080-wide portrait video
+// overran an exactly sized buffer by 32 bytes and corrupted the heap). Rows are aligned to 64
+// bytes and the buffer gets a spare 64-byte-aligned tail so such writes stay inside it.
+constexpr int kRowAlign = 64;
+constexpr int kTailPadding = 256;
 
 }  // namespace
 
@@ -41,6 +75,7 @@ void FfmpegFrameSource::close() {
     avformat_close_input(&format_);
     stream_ = nullptr;
     videoIndex_ = -1;
+    rotation_ = 0;
     frameCount_ = 0;
     lastIndex_ = -1;
     lastImage_ = QImage();
@@ -95,7 +130,9 @@ bool FfmpegFrameSource::open(const QString& path, QString* error) {
 
     startTs_ = stream_->start_time != AV_NOPTS_VALUE ? stream_->start_time : 0;
     frameDurationTs_ = std::max<long long>(1, av_rescale_q(1, av_inv_q(rate), stream_->time_base));
-    size_ = QSize(codec_->width, codec_->height);
+    rotation_ = displayRotation(stream_);
+    size_ = (rotation_ == 90 || rotation_ == 270) ? QSize(codec_->height, codec_->width)
+                                                 : QSize(codec_->width, codec_->height);
 
     if (stream_->nb_frames > 0) {
         frameCount_ = static_cast<int>(stream_->nb_frames);
@@ -173,13 +210,23 @@ QImage FfmpegFrameSource::convertFrame(const AVFrame* source) {
                                 nullptr);
     if (!sws_) return {};
 
-    // BGRA bytes are what QImage::Format_RGB32 holds on little-endian machines.
-    QImage image(source->width, source->height, QImage::Format_RGB32);
-    if (image.isNull()) return {};
-    uint8_t* dst[4] = {image.bits(), nullptr, nullptr, nullptr};
-    const int dstStride[4] = {static_cast<int>(image.bytesPerLine()), 0, 0, 0};
+    // BGRA bytes are what QImage::Format_RGB32 holds on little-endian machines. The buffer is
+    // padded (see kRowAlign) and handed to QImage, which frees it with av_free.
+    const int stride = FFALIGN(source->width * 4, kRowAlign);
+    const size_t bytes = static_cast<size_t>(stride) * static_cast<size_t>(source->height) + kTailPadding;
+    auto* buffer = static_cast<uint8_t*>(av_malloc(bytes));
+    if (!buffer) return {};
+    QImage image(buffer, source->width, source->height, stride, QImage::Format_RGB32,
+                 [](void* data) { av_free(data); }, buffer);
+    if (image.isNull()) {
+        av_free(buffer);
+        return {};
+    }
+    uint8_t* dst[4] = {buffer, nullptr, nullptr, nullptr};
+    const int dstStride[4] = {stride, 0, 0, 0};
     sws_scale(sws_, source->data, source->linesize, 0, source->height, dst, dstStride);
-    return image;
+    if (rotation_ == 0) return image;
+    return image.transformed(QTransform().rotate(rotation_));
 }
 
 }  // namespace fr

@@ -48,6 +48,7 @@ private:
     long long frameDurationTs_ = 1;
     int frameCount_ = 0;
     QSize size_;
+    int rotation_ = 0;  // clockwise degrees (0, 90, 180, 270) from the stream's display matrix
 
     int lastIndex_ = -1;
     QImage lastImage_;
